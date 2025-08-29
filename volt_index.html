@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>VoltDodge</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background-color: #0c0a1a;
+            color: #ffffff;
+            overflow: hidden;
+            touch-action: none; /* Prevents scrolling on mobile */
+        }
+        .neon-text {
+            text-shadow: 0 0 5px #fff, 0 0 10px #fff, 0 0 15px #00aaff, 0 0 20px #00aaff, 0 0 25px #00aaff, 0 0 30px #00aaff, 0 0 35px #00aaff;
+        }
+        .neon-button {
+            border: 2px solid #00aaff;
+            box-shadow: 0 0 5px #00aaff, 0 0 10px #00aaff, 0 0 15px #00aaff inset;
+            transition: all 0.2s ease-in-out;
+        }
+        .neon-button:hover {
+            background-color: #00aaff;
+            color: #0c0a1a;
+            box-shadow: 0 0 10px #00aaff, 0 0 20px #00aaff, 0 0 30px #fff;
+        }
+        canvas {
+            background-color: #0c0a1a; /* Fallback */
+            display: block;
+            margin: auto;
+            cursor: pointer;
+        }
+        .powerup-icon {
+            width: 32px;
+            height: 32px;
+        }
+    </style>
+</head>
+<body class="w-full h-screen flex items-center justify-center">
+
+    <div id="game-container" class="relative w-full h-full max-w-md mx-auto flex items-center justify-center">
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- UI Elements -->
+        <div id="ui-layer" class="absolute inset-0 flex flex-col items-center justify-between p-4 text-white pointer-events-none">
+            <div class="w-full flex justify-between items-start">
+                 <div>
+                    <h1 class="text-3xl font-bold neon-text">VoltDodge</h1>
+                    <div id="high-score-container" class="text-lg font-bold text-left">HI <span id="high-score">0</span></div>
+                 </div>
+                 <div class="flex flex-col items-end">
+                    <div id="score-container" class="text-4xl font-bold text-right hidden">
+                        <span id="score">0</span>
+                    </div>
+                    <div id="powerup-status" class="flex space-x-2 mt-2"></div>
+                 </div>
+            </div>
+        </div>
+        
+        <!-- Game Over / Start Menu -->
+        <div id="menu" class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+            <div id="start-menu" class="text-center">
+                <h2 class="text-6xl font-bold neon-text mb-4">VoltDodge</h2>
+                <p class="text-xl mb-8">Swipe to survive the surge.</p>
+                <button id="start-button" class="neon-button text-2xl font-bold py-3 px-8 rounded-lg uppercase tracking-widest">Start</button>
+            </div>
+            <div id="game-over-menu" class="text-center hidden">
+                <h2 class="text-5xl font-bold neon-text mb-2">Game Over</h2>
+                <p class="text-2xl mb-1">Final Score</p>
+                <p id="final-score" class="text-7xl font-bold mb-8">0</p>
+                <button id="retry-button" class="neon-button text-2xl font-bold py-3 px-8 rounded-lg uppercase tracking-widest">Retry</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- UI Elements ---
+        const scoreEl = document.getElementById('score');
+        const finalScoreEl = document.getElementById('final-score');
+        const scoreContainer = document.getElementById('score-container');
+        const highScoreEl = document.getElementById('high-score');
+        const menu = document.getElementById('menu');
+        const startMenu = document.getElementById('start-menu');
+        const gameOverMenu = document.getElementById('game-over-menu');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const powerupStatusEl = document.getElementById('powerup-status');
+
+        let TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, PLAYER_SIZE, PULSE_HEIGHT;
+
+        // --- Game State ---
+        let gameState = 'menu';
+        let player, path, pulses = [], powerups = [], score, gameSpeed, frameCount;
+        let particles = [], stars = [];
+        let screenShakeIntensity = 0;
+        let highScore = 0;
+
+        // Power-up state
+        let shieldActive = false;
+        let scoreBoostActive = false;
+        let shieldTimer = 0;
+        let scoreBoostTimer = 0;
+        const POWERUP_DURATION = 300; // 5 seconds at 60fps
+
+        // --- Player Controls ---
+        let touchStartX = 0;
+        let touchEndX = 0;
+
+        // --- Initial Setup ---
+        function setCanvasDimensions() {
+            const container = document.getElementById('game-container');
+            const aspectRatio = 9 / 16;
+            const containerWidth = container.clientWidth;
+            const containerHeight = container.clientHeight;
+
+            canvas.height = containerHeight;
+            canvas.width = containerHeight * aspectRatio;
+            if (canvas.width > containerWidth) {
+                canvas.width = containerWidth;
+                canvas.height = containerWidth / aspectRatio;
+            }
+
+            TILE_SIZE = canvas.width / 9;
+            GRID_WIDTH = 7;
+            GRID_HEIGHT = Math.ceil(canvas.height / TILE_SIZE);
+            PLAYER_SIZE = TILE_SIZE * 0.4;
+            PULSE_HEIGHT = TILE_SIZE * 0.3;
+        }
+
+        // --- Game Objects ---
+        class Player {
+            constructor() {
+                this.lane = Math.floor(GRID_WIDTH / 2);
+                this.y = canvas.height - TILE_SIZE * 3;
+                this.targetX = (this.lane + 1.5) * TILE_SIZE;
+                this.currentX = this.targetX;
+                this.baseColor = '#00ffff';
+                this.pulse = 0;
+            }
+
+            draw() {
+                const size = PLAYER_SIZE + Math.sin(this.pulse) * 2;
+                ctx.save();
+                ctx.fillStyle = this.baseColor;
+                ctx.shadowColor = this.baseColor;
+                ctx.shadowBlur = 20;
+                ctx.beginPath();
+                ctx.arc(this.currentX, this.y, size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.shadowBlur = 0;
+                ctx.beginPath();
+                ctx.arc(this.currentX, this.y, size * 0.5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+
+                if (shieldActive) {
+                    ctx.save();
+                    ctx.strokeStyle = '#00aaff';
+                    ctx.lineWidth = 5; // Made the line thicker
+                    ctx.shadowColor = '#00aaff';
+                    ctx.shadowBlur = 15;
+                    ctx.globalAlpha = 0.6 + Math.sin(this.pulse * 2) * 0.3;
+                    ctx.beginPath();
+                    ctx.arc(this.currentX, this.y, size * 1.5, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+            
+            update() {
+                this.pulse += 0.1;
+                this.currentX += (this.targetX - this.currentX) * 0.3;
+                if (gameState === 'playing' && frameCount % 2 === 0) {
+                     particles.push(new Particle(this.currentX, this.y, 2, this.baseColor, {x: (Math.random() - 0.5) * 0.5, y: Math.random() * 1 + 1}, 20));
+                }
+            }
+
+            move(direction) {
+                const newLane = this.lane + direction;
+                if (newLane >= 0 && newLane < GRID_WIDTH) {
+                    this.lane = newLane;
+                    this.targetX = (this.lane + 1.5) * TILE_SIZE;
+                }
+            }
+        }
+
+        class Path {
+            // ... (No changes from previous version)
+            constructor() {
+                this.tiles = []; this.activeLanes = GRID_WIDTH; this.offset = 0; this.shrinkInterval = 500;
+                this.nextShrinkScore = this.shrinkInterval; this.createGrid();
+                this.isWarning = false;
+                this.warningTimer = 0;
+            }
+            createGrid() { for (let y = 0; y < GRID_HEIGHT + 2; y++) { for (let x = 0; x < GRID_WIDTH; x++) { this.tiles.push({x, y}); } } }
+            update() {
+                this.offset = (this.offset + gameSpeed) % TILE_SIZE;
+                if (score >= this.nextShrinkScore && this.activeLanes > 3 && !this.isWarning) { 
+                    this.shrink(); this.nextShrinkScore += this.shrinkInterval; 
+                }
+
+                if (this.isWarning) {
+                    this.warningTimer--;
+                    if (this.warningTimer <= 0) {
+                        this.isWarning = false;
+                        if (this.activeLanes > 3) {
+                            this.activeLanes -= 2;
+                        }
+                    }
+                }
+            }
+            draw() {
+                const startLane = Math.floor((GRID_WIDTH - this.activeLanes) / 2); const endLane = startLane + this.activeLanes;
+                ctx.strokeStyle = '#3a2fb0'; ctx.lineWidth = 2; ctx.shadowColor = '#3a2fb0'; ctx.shadowBlur = 10;
+                this.tiles.forEach(tile => { 
+                    if (this.isWarning) {
+                        const isWarnedLane = tile.x === startLane || tile.x === endLane - 1;
+                        if (isWarnedLane && Math.floor(this.warningTimer / 10) % 2 === 0) {
+                            return; // Skip drawing to create a blink effect
+                        }
+                    }
+                    if (tile.x >= startLane && tile.x < endLane) {
+                        const tileY = tile.y * TILE_SIZE - this.offset; const tileX = (tile.x + 1) * TILE_SIZE;
+                        ctx.strokeRect(tileX, tileY, TILE_SIZE, TILE_SIZE); 
+                    } 
+                });
+            }
+            shrink() { 
+                this.isWarning = true;
+                this.warningTimer = 300; // 5 seconds at 60fps
+            }
+            isLaneActive(lane) { const startLane = Math.floor((GRID_WIDTH - this.activeLanes) / 2); return lane >= startLane && lane < startLane + this.activeLanes; }
+        }
+
+        class Pulse {
+            // ... (No changes from previous version)
+            constructor(lane, speed) { this.lane = lane; this.x = (this.lane + 1.5) * TILE_SIZE; this.y = -PULSE_HEIGHT; this.speed = speed; this.color = '#ff00ff'; }
+            update() { this.y += this.speed; }
+            draw() {
+                ctx.save(); ctx.fillStyle = this.color; ctx.shadowColor = this.color; ctx.shadowBlur = 15;
+                ctx.fillRect(this.x - TILE_SIZE/2, this.y - PULSE_HEIGHT/2, TILE_SIZE, PULSE_HEIGHT);
+                ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.beginPath();
+                ctx.moveTo(this.x - TILE_SIZE/2, this.y + (Math.random() - 0.5) * PULSE_HEIGHT);
+                ctx.lineTo(this.x + TILE_SIZE/2, this.y + (Math.random() - 0.5) * PULSE_HEIGHT);
+                ctx.stroke(); ctx.restore();
+            }
+        }
+
+        class PowerUp {
+            constructor(lane, type) {
+                this.lane = lane;
+                this.x = (this.lane + 1.5) * TILE_SIZE;
+                this.y = -TILE_SIZE;
+                this.type = type;
+                this.size = PLAYER_SIZE * 1.2;
+                this.rotation = 0;
+                this.colors = {
+                    shield: '#00aaff',
+                    score_boost: '#ffd700',
+                    clear: '#00ff7f'
+                };
+                this.color = this.colors[type];
+            }
+
+            update() {
+                this.y += gameSpeed * 0.8; // Move slightly slower than obstacles
+                this.rotation += 0.05;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = this.color;
+                ctx.shadowBlur = 20;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+        
+        class Particle {
+             // ... (No changes from previous version)
+            constructor(x, y, radius, color, velocity, life) { this.x = x; this.y = y; this.radius = radius; this.color = color; this.velocity = velocity; this.life = life; this.initialLife = life; }
+            draw() { ctx.save(); ctx.globalAlpha = this.life / this.initialLife; ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
+            update() { this.x += this.velocity.x; this.y += this.velocity.y; this.life--; }
+        }
+        
+        class Star {
+            constructor(layer) {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.layer = layer; // 1, 2, or 3
+                this.size = (Math.random() * 0.5 + 0.5) * layer;
+                this.speed = (Math.random() * 0.2 + 0.1) * layer;
+            }
+
+            draw() {
+                ctx.fillStyle = `rgba(255, 255, 255, ${this.size * 0.3})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            update() {
+                if (gameState === 'playing' || gameState === 'menu') {
+                    const currentSpeed = (gameState === 'playing') ? gameSpeed : 1;
+                    this.y += currentSpeed * this.speed * 0.2;
+                }
+                if (this.y > canvas.height) { this.y = 0; this.x = Math.random() * canvas.width; }
+            }
+        }
+
+        // --- Game Logic ---
+        function init() {
+            setCanvasDimensions();
+            score = 0; frameCount = 0; gameSpeed = 5;
+            player = new Player(); path = new Path();
+            pulses = []; particles = []; powerups = [];
+            shieldActive = false; scoreBoostActive = false;
+            shieldTimer = 0; scoreBoostTimer = 0;
+            
+            scoreEl.textContent = 0;
+            scoreContainer.classList.remove('hidden');
+            menu.classList.add('hidden');
+            gameState = 'playing';
+        }
+
+        function update() {
+            stars.forEach(star => star.update());
+            particles = particles.filter(p => p.life > 0);
+            particles.forEach(p => p.update());
+
+            if (gameState !== 'playing') return;
+
+            frameCount++;
+            score += scoreBoostActive ? 2 : 1;
+            scoreEl.textContent = score;
+
+            if (frameCount % 300 === 0) gameSpeed = Math.min(15, gameSpeed + 0.5);
+
+            path.update(); player.update();
+
+            if (frameCount % Math.max(15, 60 - Math.floor(score / 100)) === 0) {
+                spawnEntities();
+            }
+
+            pulses = pulses.filter(p => p.y <= canvas.height);
+            pulses.forEach(pulse => pulse.update());
+
+            powerups = powerups.filter(p => p.y <= canvas.height);
+            powerups.forEach(p => p.update());
+            
+            updatePowerUps();
+            checkCollisions();
+        }
+
+        function spawnEntities() {
+            const startLane = Math.floor((GRID_WIDTH - path.activeLanes) / 2);
+            const availableLanes = Array.from({ length: path.activeLanes }, (_, i) => startLane + i);
+            if (availableLanes.length === 0) return;
+
+            // Chance to spawn a powerup - increased from 5% to 12%
+            if (Math.random() < 0.12 && !shieldActive && !scoreBoostActive) {
+                const lane = availableLanes[Math.floor(Math.random() * availableLanes.length)];
+                const types = ['shield', 'score_boost', 'clear'];
+                const type = types[Math.floor(Math.random() * types.length)];
+                powerups.push(new PowerUp(lane, type));
+                return;
+            }
+
+            // --- New, Safer Pulse Generation Logic ---
+            const patternType = Math.random();
+
+            // On narrow paths (less than 3 lanes), or 70% of the time, spawn a single pulse.
+            if (patternType < 0.7 || availableLanes.length < 3) {
+                const lane = availableLanes[Math.floor(Math.random() * availableLanes.length)];
+                pulses.push(new Pulse(lane, gameSpeed));
+            } 
+            // 30% of the time, spawn a pair of pulses with a guaranteed safe gap in between.
+            else {
+                // Pick a random starting point for the pair, ensuring there's room for the second pulse and the gap.
+                const firstLaneIndex = Math.floor(Math.random() * (availableLanes.length - 2));
+                const lane1 = availableLanes[firstLaneIndex];
+                // The second pulse is always 2 lanes over, creating a 1-lane gap.
+                const lane2 = availableLanes[firstLaneIndex + 2]; 
+
+                pulses.push(new Pulse(lane1, gameSpeed));
+                pulses.push(new Pulse(lane2, gameSpeed));
+            }
+        }
+
+        function updatePowerUps() {
+            // Shield timer is no longer needed here
+            if (scoreBoostActive) {
+                scoreBoostTimer--;
+                if (scoreBoostTimer <= 0) scoreBoostActive = false;
+            }
+            updatePowerUpUI();
+        }
+
+        function updatePowerUpUI() {
+            powerupStatusEl.innerHTML = '';
+            if (shieldActive) {
+                powerupStatusEl.innerHTML += `<div class="powerup-icon bg-blue-500 rounded-full p-1 shadow-lg">🛡️</div>`;
+            }
+            if (scoreBoostActive) {
+                powerupStatusEl.innerHTML += `<div class="powerup-icon bg-yellow-500 rounded-full p-1 shadow-lg">💰</div>`;
+            }
+        }
+
+        function checkCollisions() {
+            // Obstacle collision - updated logic
+            for (let i = pulses.length - 1; i >= 0; i--) {
+                const pulse = pulses[i];
+                const collisionDistance = PLAYER_SIZE * 0.8 + PULSE_HEIGHT / 2;
+                if (pulse.lane === player.lane && Math.abs(pulse.y - player.y) < collisionDistance) {
+                    if (shieldActive) {
+                        shieldActive = false;
+                        pulses.splice(i, 1); // Destroy the obstacle
+                        
+                        // Shield break particle effect
+                        for (let j = 0; j < 40; j++) {
+                            const angle = Math.random() * Math.PI * 2;
+                            const speed = Math.random() * 4 + 1;
+                            particles.push(new Particle(player.currentX, player.y, 2, '#00aaff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 35));
+                        }
+                        screenShakeIntensity = 12;
+
+                    } else {
+                        gameOver();
+                        break; // Exit loop since game is over
+                    }
+                }
+            }
+
+            // Edge of path collision
+            if (player && !path.isLaneActive(player.lane)) {
+                if(shieldActive) {
+                    shieldActive = false;
+                    // Add a shield break effect for hitting the wall
+                    for (let j = 0; j < 40; j++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const speed = Math.random() * 4 + 1;
+                        particles.push(new Particle(player.currentX, player.y, 2, '#00aaff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 35));
+                    }
+                    screenShakeIntensity = 12;
+                } else {
+                    gameOver();
+                }
+            }
+
+            // Power-up collision
+            powerups.forEach((powerup, index) => {
+                 const dist = Math.hypot(powerup.x - player.currentX, powerup.y - player.y);
+                 if (dist < powerup.size + PLAYER_SIZE) {
+                    activatePowerUp(powerup.type);
+                    powerups.splice(index, 1);
+                 }
+            });
+        }
+        
+        function activatePowerUp(type) {
+             for (let i = 0; i < 30; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 4 + 1;
+                particles.push(new Particle(player.currentX, player.y, 2, '#fff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 30));
+            }
+            screenShakeIntensity = 10;
+            
+            if (type === 'shield') { 
+                shieldActive = true; 
+                // No longer need to set a timer
+            }
+            if (type === 'score_boost') { scoreBoostActive = true; scoreBoostTimer = POWERUP_DURATION; }
+            if (type === 'clear') { pulses = []; }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            if (screenShakeIntensity > 0) {
+                const dx = (Math.random() - 0.5) * screenShakeIntensity;
+                const dy = (Math.random() - 0.5) * screenShakeIntensity;
+                ctx.translate(dx, dy);
+                screenShakeIntensity *= 0.9;
+            }
+            stars.forEach(star => star.draw());
+            if (path) path.draw();
+            pulses.forEach(pulse => pulse.draw());
+            powerups.forEach(p => p.draw());
+            particles.forEach(p => p.draw());
+            if ((gameState === 'playing' || gameState === 'gameOver') && player) {
+                player.draw();
+            }
+            ctx.restore();
+        }
+
+        function gameOver() {
+            if (gameState === 'gameOver') return; 
+            gameState = 'gameOver';
+            
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('voltDodgeHighScore', highScore);
+                highScoreEl.textContent = highScore;
+            }
+
+            for (let i = 0; i < 50; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 1;
+                particles.push(new Particle(player.currentX, player.y, 3, '#ff00ff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 40));
+            }
+            screenShakeIntensity = 15;
+            
+            setTimeout(() => {
+                scoreContainer.classList.add('hidden');
+                menu.classList.remove('hidden');
+                startMenu.classList.add('hidden');
+                gameOverMenu.classList.remove('hidden');
+                finalScoreEl.textContent = score;
+            }, 500);
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Event Listeners ---
+        function handleKeyDown(e) { if (gameState !== 'playing') return; if (e.key === 'ArrowLeft' || e.key === 'a') player.move(-1); else if (e.key === 'ArrowRight' || e.key === 'd') player.move(1); }
+        function handleTouchStart(e) { touchStartX = e.touches[0].clientX; }
+        function handleTouchMove(e) { touchEndX = e.touches[0].clientX; }
+        function handleTouchEnd() {
+            if (gameState !== 'playing' || touchStartX === 0) return;
+            const swipeDistance = touchEndX - touchStartX;
+            if (Math.abs(swipeDistance) > 30) { if (swipeDistance < 0) player.move(-1); else player.move(1); }
+            touchStartX = 0; touchEndX = 0;
+        }
+        
+        window.addEventListener('keydown', handleKeyDown);
+        canvas.addEventListener('touchstart', handleTouchStart);
+        canvas.addEventListener('touchmove', handleTouchMove);
+        canvas.addEventListener('touchend', handleTouchEnd);
+        startButton.addEventListener('click', init);
+        retryButton.addEventListener('click', init);
+        window.addEventListener('resize', setCanvasDimensions);
+        
+        // --- Final Setup ---
+        function loadGame() {
+            highScore = localStorage.getItem('voltDodgeHighScore') || 0;
+            highScoreEl.textContent = highScore;
+            setCanvasDimensions();
+            if (stars.length === 0) {
+                 for (let i = 0; i < 150; i++) stars.push(new Star(Math.ceil(Math.random() * 3)));
+            }
+            gameLoop();
+        }
+
+        loadGame();
+    </script>
+</body>
+</html>
+
+
+
+
