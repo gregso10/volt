@@ -24,10 +24,16 @@
             box-shadow: 0 0 5px #00aaff, 0 0 10px #00aaff, 0 0 15px #00aaff inset;
             transition: all 0.2s ease-in-out;
         }
-        .neon-button:hover {
+        .neon-button:hover, .neon-button.active {
             background-color: #00aaff;
             color: #0c0a1a;
             box-shadow: 0 0 10px #00aaff, 0 0 20px #00aaff, 0 0 30px #fff;
+        }
+         .neon-button:disabled {
+            border-color: #444;
+            color: #666;
+            cursor: not-allowed;
+            box-shadow: none;
         }
         canvas {
             background-color: #0c0a1a; /* Fallback */
@@ -38,6 +44,17 @@
         .powerup-icon {
             width: 32px;
             height: 32px;
+        }
+        .skin-card {
+            border: 2px solid #3a2fb0;
+            transition: all 0.2s ease-in-out;
+        }
+        .skin-card.selected {
+            border-color: #00aaff;
+            box-shadow: 0 0 10px #00aaff;
+        }
+        .skin-card.locked {
+            background-color: rgba(0,0,0,0.5);
         }
     </style>
 </head>
@@ -68,12 +85,27 @@
                 <h2 class="text-6xl font-bold neon-text mb-4">VoltDodge</h2>
                 <p class="text-xl mb-8">Swipe to survive the surge.</p>
                 <button id="start-button" class="neon-button text-2xl font-bold py-3 px-8 rounded-lg uppercase tracking-widest">Start</button>
+                <button id="skins-button" class="mt-4 neon-button text-xl font-bold py-2 px-6 rounded-lg uppercase tracking-widest">Skins</button>
             </div>
             <div id="game-over-menu" class="text-center hidden">
                 <h2 class="text-5xl font-bold neon-text mb-2">Game Over</h2>
                 <p class="text-2xl mb-1">Final Score</p>
-                <p id="final-score" class="text-7xl font-bold mb-8">0</p>
-                <button id="retry-button" class="neon-button text-2xl font-bold py-3 px-8 rounded-lg uppercase tracking-widest">Retry</button>
+                <p id="final-score" class="text-7xl font-bold mb-4">0</p>
+                <p id="taunt-message" class="text-amber-400 text-lg mb-4 hidden max-w-xs mx-auto"></p>
+                <div class="flex flex-col items-center">
+                    <button id="retry-button" class="w-48 neon-button text-2xl font-bold py-3 px-8 rounded-lg uppercase tracking-widest">Retry</button>
+                    <button id="skins-button-gameover" class="w-48 mt-4 neon-button text-xl font-bold py-2 px-6 rounded-lg uppercase tracking-widest">Skins</button>
+                </div>
+            </div>
+             <div id="skins-menu" class="w-full h-full p-4 text-center hidden flex-col">
+                <h2 class="text-4xl font-bold neon-text mb-2">Select Skin</h2>
+                <p class="text-lg mb-4">Total Distance: <span id="total-distance">0</span></p>
+                <div id="skins-grid" class="flex-grow grid grid-cols-2 gap-4 overflow-y-auto">
+                    <!-- Skins will be populated here -->
+                </div>
+                <div class="mt-4 flex justify-center">
+                    <button id="back-button" class="neon-button text-xl font-bold py-2 px-6 rounded-lg uppercase tracking-widest">Back</button>
+                </div>
             </div>
         </div>
     </div>
@@ -90,11 +122,27 @@
         const menu = document.getElementById('menu');
         const startMenu = document.getElementById('start-menu');
         const gameOverMenu = document.getElementById('game-over-menu');
+        const skinsMenu = document.getElementById('skins-menu');
         const startButton = document.getElementById('start-button');
         const retryButton = document.getElementById('retry-button');
+        const skinsButton = document.getElementById('skins-button');
+        const skinsButtonGameOver = document.getElementById('skins-button-gameover');
+        const backButton = document.getElementById('back-button');
+        const skinsGrid = document.getElementById('skins-grid');
+        const totalDistanceEl = document.getElementById('total-distance');
         const powerupStatusEl = document.getElementById('powerup-status');
+        const tauntMessageEl = document.getElementById('taunt-message');
 
         let TILE_SIZE, GRID_WIDTH, GRID_HEIGHT, PLAYER_SIZE, PULSE_HEIGHT;
+
+        // --- Skin Definitions ---
+        const SKINS = [
+            { id: 'default', name: 'Default', unlockScore: 0, color: '#00ffff', shape: 'circle', symbol: '●' },
+            { id: 'ember', name: 'Ember', unlockScore: 5000, color: '#ff4500', shape: 'circle', symbol: '●' },
+            { id: 'jade', name: 'Jade', unlockScore: 15000, color: '#00ff7f', shape: 'square', symbol: '■' },
+            { id: 'void', name: 'Void', unlockScore: 30000, color: '#9400d3', shape: 'triangle', symbol: '▲' },
+            { id: 'gold', name: 'Gold', unlockScore: 50000, color: '#ffd700', shape: 'square', symbol: '■' }
+        ];
 
         // --- Game State ---
         let gameState = 'menu';
@@ -102,11 +150,14 @@
         let particles = [], stars = [];
         let screenShakeIntensity = 0;
         let highScore = 0;
+        let totalDistance = 0;
+        let previousScore = 0;
+        let currentSkinId = 'default';
+        let menuToReturnTo = 'start';
 
         // Power-up state
         let shieldActive = false;
         let scoreBoostActive = false;
-        let shieldTimer = 0;
         let scoreBoostTimer = 0;
         const POWERUP_DURATION = 300; // 5 seconds at 60fps
 
@@ -142,31 +193,44 @@
                 this.y = canvas.height - TILE_SIZE * 3;
                 this.targetX = (this.lane + 1.5) * TILE_SIZE;
                 this.currentX = this.targetX;
-                this.baseColor = '#00ffff';
                 this.pulse = 0;
+                this.skin = SKINS.find(s => s.id === currentSkinId);
             }
 
             draw() {
                 const size = PLAYER_SIZE + Math.sin(this.pulse) * 2;
                 ctx.save();
-                ctx.fillStyle = this.baseColor;
-                ctx.shadowColor = this.baseColor;
+                ctx.fillStyle = this.skin.color;
+                ctx.shadowColor = this.skin.color;
                 ctx.shadowBlur = 20;
                 ctx.beginPath();
-                ctx.arc(this.currentX, this.y, size, 0, Math.PI * 2);
+
+                if (this.skin.shape === 'square') {
+                     ctx.fillRect(this.currentX - size, this.y - size, size * 2, size * 2);
+                } else if (this.skin.shape === 'triangle') {
+                    ctx.moveTo(this.currentX, this.y - size);
+                    ctx.lineTo(this.currentX - size, this.y + size);
+                    ctx.lineTo(this.currentX + size, this.y + size);
+                    ctx.closePath();
+                } else { // Default to circle
+                    ctx.arc(this.currentX, this.y, size, 0, Math.PI * 2);
+                }
+                
                 ctx.fill();
                 
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
                 ctx.shadowBlur = 0;
                 ctx.beginPath();
-                ctx.arc(this.currentX, this.y, size * 0.5, 0, Math.PI * 2);
-                ctx.fill();
+                 if (this.skin.shape !== 'triangle') { // Inner highlight
+                    ctx.arc(this.currentX, this.y, size * 0.5, 0, Math.PI * 2);
+                    ctx.fill();
+                 }
                 ctx.restore();
 
                 if (shieldActive) {
                     ctx.save();
                     ctx.strokeStyle = '#00aaff';
-                    ctx.lineWidth = 5; // Made the line thicker
+                    ctx.lineWidth = 5;
                     ctx.shadowColor = '#00aaff';
                     ctx.shadowBlur = 15;
                     ctx.globalAlpha = 0.6 + Math.sin(this.pulse * 2) * 0.3;
@@ -181,7 +245,7 @@
                 this.pulse += 0.1;
                 this.currentX += (this.targetX - this.currentX) * 0.3;
                 if (gameState === 'playing' && frameCount % 2 === 0) {
-                     particles.push(new Particle(this.currentX, this.y, 2, this.baseColor, {x: (Math.random() - 0.5) * 0.5, y: Math.random() * 1 + 1}, 20));
+                     particles.push(new Particle(this.currentX, this.y, 2, this.skin.color, {x: (Math.random() - 0.5) * 0.5, y: Math.random() * 1 + 1}, 20));
                 }
             }
 
@@ -195,7 +259,6 @@
         }
 
         class Path {
-            // ... (No changes from previous version)
             constructor() {
                 this.tiles = []; this.activeLanes = GRID_WIDTH; this.offset = 0; this.shrinkInterval = 500;
                 this.nextShrinkScore = this.shrinkInterval; this.createGrid();
@@ -206,7 +269,8 @@
             update() {
                 this.offset = (this.offset + gameSpeed) % TILE_SIZE;
                 if (score >= this.nextShrinkScore && this.activeLanes > 3 && !this.isWarning) { 
-                    this.shrink(); this.nextShrinkScore += this.shrinkInterval; 
+                     this.nextShrinkScore += this.shrinkInterval; 
+                     this.shrink();
                 }
 
                 if (this.isWarning) {
@@ -226,7 +290,7 @@
                     if (this.isWarning) {
                         const isWarnedLane = tile.x === startLane || tile.x === endLane - 1;
                         if (isWarnedLane && Math.floor(this.warningTimer / 10) % 2 === 0) {
-                            return; // Skip drawing to create a blink effect
+                            return;
                         }
                     }
                     if (tile.x >= startLane && tile.x < endLane) {
@@ -237,13 +301,12 @@
             }
             shrink() { 
                 this.isWarning = true;
-                this.warningTimer = 300; // 5 seconds at 60fps
+                this.warningTimer = 300; 
             }
             isLaneActive(lane) { const startLane = Math.floor((GRID_WIDTH - this.activeLanes) / 2); return lane >= startLane && lane < startLane + this.activeLanes; }
         }
 
         class Pulse {
-            // ... (No changes from previous version)
             constructor(lane, speed) { this.lane = lane; this.x = (this.lane + 1.5) * TILE_SIZE; this.y = -PULSE_HEIGHT; this.speed = speed; this.color = '#ff00ff'; }
             update() { this.y += this.speed; }
             draw() {
@@ -264,35 +327,18 @@
                 this.type = type;
                 this.size = PLAYER_SIZE * 1.2;
                 this.rotation = 0;
-                this.colors = {
-                    shield: '#00aaff',
-                    score_boost: '#ffd700',
-                    clear: '#00ff7f'
-                };
+                this.colors = { shield: '#00aaff', score_boost: '#ffd700', clear: '#00ff7f' };
                 this.color = this.colors[type];
             }
-
-            update() {
-                this.y += gameSpeed * 0.8; // Move slightly slower than obstacles
-                this.rotation += 0.05;
-            }
-
+            update() { this.y += gameSpeed * 0.8; this.rotation += 0.05; }
             draw() {
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.rotation);
-                ctx.fillStyle = this.color;
-                ctx.shadowColor = this.color;
-                ctx.shadowBlur = 20;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.restore();
+                ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.rotation);
+                ctx.fillStyle = this.color; ctx.shadowColor = this.color; ctx.shadowBlur = 20;
+                ctx.beginPath(); ctx.arc(0, 0, this.size, 0, Math.PI * 2); ctx.fill(); ctx.restore();
             }
         }
         
         class Particle {
-             // ... (No changes from previous version)
             constructor(x, y, radius, color, velocity, life) { this.x = x; this.y = y; this.radius = radius; this.color = color; this.velocity = velocity; this.life = life; this.initialLife = life; }
             draw() { ctx.save(); ctx.globalAlpha = this.life / this.initialLife; ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
             update() { this.x += this.velocity.x; this.y += this.velocity.y; this.life--; }
@@ -300,20 +346,10 @@
         
         class Star {
             constructor(layer) {
-                this.x = Math.random() * canvas.width;
-                this.y = Math.random() * canvas.height;
-                this.layer = layer; // 1, 2, or 3
-                this.size = (Math.random() * 0.5 + 0.5) * layer;
-                this.speed = (Math.random() * 0.2 + 0.1) * layer;
+                this.x = Math.random() * canvas.width; this.y = Math.random() * canvas.height;
+                this.layer = layer; this.size = (Math.random() * 0.5 + 0.5) * layer; this.speed = (Math.random() * 0.2 + 0.1) * layer;
             }
-
-            draw() {
-                ctx.fillStyle = `rgba(255, 255, 255, ${this.size * 0.3})`;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
+            draw() { ctx.fillStyle = `rgba(255, 255, 255, ${this.size * 0.3})`; ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2); ctx.fill(); }
             update() {
                 if (gameState === 'playing' || gameState === 'menu') {
                     const currentSpeed = (gameState === 'playing') ? gameSpeed : 1;
@@ -325,13 +361,11 @@
 
         // --- Game Logic ---
         function init() {
-            setCanvasDimensions();
-            score = 0; frameCount = 0; gameSpeed = 5;
+            setCanvasDimensions(); score = 0; frameCount = 0; gameSpeed = 5;
             player = new Player(); path = new Path();
             pulses = []; particles = []; powerups = [];
             shieldActive = false; scoreBoostActive = false;
-            shieldTimer = 0; scoreBoostTimer = 0;
-            
+            scoreBoostTimer = 0;
             scoreEl.textContent = 0;
             scoreContainer.classList.remove('hidden');
             menu.classList.add('hidden');
@@ -342,169 +376,89 @@
             stars.forEach(star => star.update());
             particles = particles.filter(p => p.life > 0);
             particles.forEach(p => p.update());
-
             if (gameState !== 'playing') return;
-
-            frameCount++;
-            score += scoreBoostActive ? 2 : 1;
-            scoreEl.textContent = score;
-
+            frameCount++; score += scoreBoostActive ? 2 : 1; scoreEl.textContent = score;
             if (frameCount % 300 === 0) gameSpeed = Math.min(15, gameSpeed + 0.5);
-
             path.update(); player.update();
-
-            if (frameCount % Math.max(15, 60 - Math.floor(score / 100)) === 0) {
-                spawnEntities();
-            }
-
-            pulses = pulses.filter(p => p.y <= canvas.height);
-            pulses.forEach(pulse => pulse.update());
-
-            powerups = powerups.filter(p => p.y <= canvas.height);
-            powerups.forEach(p => p.update());
-            
-            updatePowerUps();
-            checkCollisions();
+            if (frameCount % Math.max(15, 60 - Math.floor(score / 100)) === 0) { spawnEntities(); }
+            pulses = pulses.filter(p => p.y <= canvas.height); pulses.forEach(pulse => pulse.update());
+            powerups = powerups.filter(p => p.y <= canvas.height); powerups.forEach(p => p.update());
+            updatePowerUps(); checkCollisions();
         }
 
         function spawnEntities() {
             const startLane = Math.floor((GRID_WIDTH - path.activeLanes) / 2);
             const availableLanes = Array.from({ length: path.activeLanes }, (_, i) => startLane + i);
             if (availableLanes.length === 0) return;
-
-            // Chance to spawn a powerup - increased from 5% to 12%
             if (Math.random() < 0.12 && !shieldActive && !scoreBoostActive) {
                 const lane = availableLanes[Math.floor(Math.random() * availableLanes.length)];
                 const types = ['shield', 'score_boost', 'clear'];
                 const type = types[Math.floor(Math.random() * types.length)];
-                powerups.push(new PowerUp(lane, type));
-                return;
+                powerups.push(new PowerUp(lane, type)); return;
             }
-
-            // --- New, Safer Pulse Generation Logic ---
             const patternType = Math.random();
-
-            // On narrow paths (less than 3 lanes), or 70% of the time, spawn a single pulse.
             if (patternType < 0.7 || availableLanes.length < 3) {
                 const lane = availableLanes[Math.floor(Math.random() * availableLanes.length)];
                 pulses.push(new Pulse(lane, gameSpeed));
-            } 
-            // 30% of the time, spawn a pair of pulses with a guaranteed safe gap in between.
-            else {
-                // Pick a random starting point for the pair, ensuring there's room for the second pulse and the gap.
+            } else {
                 const firstLaneIndex = Math.floor(Math.random() * (availableLanes.length - 2));
                 const lane1 = availableLanes[firstLaneIndex];
-                // The second pulse is always 2 lanes over, creating a 1-lane gap.
                 const lane2 = availableLanes[firstLaneIndex + 2]; 
-
-                pulses.push(new Pulse(lane1, gameSpeed));
-                pulses.push(new Pulse(lane2, gameSpeed));
+                pulses.push(new Pulse(lane1, gameSpeed)); pulses.push(new Pulse(lane2, gameSpeed));
             }
         }
 
         function updatePowerUps() {
-            // Shield timer is no longer needed here
-            if (scoreBoostActive) {
-                scoreBoostTimer--;
-                if (scoreBoostTimer <= 0) scoreBoostActive = false;
-            }
+            if (scoreBoostActive) { scoreBoostTimer--; if (scoreBoostTimer <= 0) scoreBoostActive = false; }
             updatePowerUpUI();
         }
 
         function updatePowerUpUI() {
             powerupStatusEl.innerHTML = '';
-            if (shieldActive) {
-                powerupStatusEl.innerHTML += `<div class="powerup-icon bg-blue-500 rounded-full p-1 shadow-lg">🛡️</div>`;
-            }
-            if (scoreBoostActive) {
-                powerupStatusEl.innerHTML += `<div class="powerup-icon bg-yellow-500 rounded-full p-1 shadow-lg">💰</div>`;
-            }
+            if (shieldActive) powerupStatusEl.innerHTML += `<div class="powerup-icon bg-blue-500 rounded-full p-1 shadow-lg">🛡️</div>`;
+            if (scoreBoostActive) powerupStatusEl.innerHTML += `<div class="powerup-icon bg-yellow-500 rounded-full p-1 shadow-lg">💰</div>`;
         }
 
         function checkCollisions() {
-            // Obstacle collision - updated logic
             for (let i = pulses.length - 1; i >= 0; i--) {
-                const pulse = pulses[i];
-                const collisionDistance = PLAYER_SIZE * 0.8 + PULSE_HEIGHT / 2;
+                const pulse = pulses[i]; const collisionDistance = PLAYER_SIZE * 0.8 + PULSE_HEIGHT / 2;
                 if (pulse.lane === player.lane && Math.abs(pulse.y - player.y) < collisionDistance) {
                     if (shieldActive) {
-                        shieldActive = false;
-                        pulses.splice(i, 1); // Destroy the obstacle
-                        
-                        // Shield break particle effect
-                        for (let j = 0; j < 40; j++) {
-                            const angle = Math.random() * Math.PI * 2;
-                            const speed = Math.random() * 4 + 1;
-                            particles.push(new Particle(player.currentX, player.y, 2, '#00aaff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 35));
-                        }
+                        shieldActive = false; pulses.splice(i, 1); 
+                        for (let j = 0; j < 40; j++) { const angle = Math.random() * Math.PI * 2; const speed = Math.random() * 4 + 1; particles.push(new Particle(player.currentX, player.y, 2, '#00aaff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 35)); }
                         screenShakeIntensity = 12;
-
-                    } else {
-                        gameOver();
-                        break; // Exit loop since game is over
-                    }
+                    } else { gameOver(); break; }
                 }
             }
-
-            // Edge of path collision
             if (player && !path.isLaneActive(player.lane)) {
                 if(shieldActive) {
                     shieldActive = false;
-                    // Add a shield break effect for hitting the wall
-                    for (let j = 0; j < 40; j++) {
-                        const angle = Math.random() * Math.PI * 2;
-                        const speed = Math.random() * 4 + 1;
-                        particles.push(new Particle(player.currentX, player.y, 2, '#00aaff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 35));
-                    }
+                    for (let j = 0; j < 40; j++) { const angle = Math.random() * Math.PI * 2; const speed = Math.random() * 4 + 1; particles.push(new Particle(player.currentX, player.y, 2, '#00aaff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 35)); }
                     screenShakeIntensity = 12;
-                } else {
-                    gameOver();
-                }
+                } else { gameOver(); }
             }
-
-            // Power-up collision
             powerups.forEach((powerup, index) => {
                  const dist = Math.hypot(powerup.x - player.currentX, powerup.y - player.y);
-                 if (dist < powerup.size + PLAYER_SIZE) {
-                    activatePowerUp(powerup.type);
-                    powerups.splice(index, 1);
-                 }
+                 if (dist < powerup.size + PLAYER_SIZE) { activatePowerUp(powerup.type); powerups.splice(index, 1); }
             });
         }
         
         function activatePowerUp(type) {
-             for (let i = 0; i < 30; i++) {
-                const angle = Math.random() * Math.PI * 2;
-                const speed = Math.random() * 4 + 1;
-                particles.push(new Particle(player.currentX, player.y, 2, '#fff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 30));
-            }
+             for (let i = 0; i < 30; i++) { const angle = Math.random() * Math.PI * 2; const speed = Math.random() * 4 + 1; particles.push(new Particle(player.currentX, player.y, 2, '#fff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 30)); }
             screenShakeIntensity = 10;
-            
-            if (type === 'shield') { 
-                shieldActive = true; 
-                // No longer need to set a timer
-            }
+            if (type === 'shield') shieldActive = true; 
             if (type === 'score_boost') { scoreBoostActive = true; scoreBoostTimer = POWERUP_DURATION; }
-            if (type === 'clear') { pulses = []; }
+            if (type === 'clear') pulses = []; 
         }
 
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.save();
-            if (screenShakeIntensity > 0) {
-                const dx = (Math.random() - 0.5) * screenShakeIntensity;
-                const dy = (Math.random() - 0.5) * screenShakeIntensity;
-                ctx.translate(dx, dy);
-                screenShakeIntensity *= 0.9;
-            }
+            if (screenShakeIntensity > 0) { const dx = (Math.random() - 0.5) * screenShakeIntensity; const dy = (Math.random() - 0.5) * screenShakeIntensity; ctx.translate(dx, dy); screenShakeIntensity *= 0.9; }
             stars.forEach(star => star.draw());
             if (path) path.draw();
-            pulses.forEach(pulse => pulse.draw());
-            powerups.forEach(p => p.draw());
-            particles.forEach(p => p.draw());
-            if ((gameState === 'playing' || gameState === 'gameOver') && player) {
-                player.draw();
-            }
+            pulses.forEach(pulse => pulse.draw()); powerups.forEach(p => p.draw()); particles.forEach(p => p.draw());
+            if ((gameState === 'playing' || gameState === 'gameOver') && player) player.draw();
             ctx.restore();
         }
 
@@ -512,32 +466,107 @@
             if (gameState === 'gameOver') return; 
             gameState = 'gameOver';
             
-            if (score > highScore) {
-                highScore = score;
-                localStorage.setItem('voltDodgeHighScore', highScore);
-                highScoreEl.textContent = highScore;
+            if (score > highScore) { highScore = score; localStorage.setItem('voltDodgeHighScore', highScore); highScoreEl.textContent = highScore; }
+            
+            // Robustly update total distance
+            let savedTotalDistance = parseInt(localStorage.getItem('voltDodgeTotalDistance'));
+            if (isNaN(savedTotalDistance)) {
+                savedTotalDistance = 0;
             }
+            totalDistance = savedTotalDistance + score;
+            localStorage.setItem('voltDodgeTotalDistance', totalDistance);
+            
+            if (score < previousScore && previousScore > 100) {
+                const taunts = [
+                    `Aww, only ${score}? Looks like you need to work on your reflexes.`,
+                    `Just ${score}? My grandmother dodges better, and she's asleep.`,
+                    `${score} is cute. Your previous score of ${previousScore} is laughing, though.`,
+                    `Are you even trying? ${score} won't impress anyone.`
+                ];
+                tauntMessageEl.textContent = taunts[Math.floor(Math.random() * taunts.length)];
+                tauntMessageEl.classList.remove('hidden');
+            } else {
+                tauntMessageEl.classList.add('hidden');
+            }
+            previousScore = score;
+            localStorage.setItem('voltDodgePreviousScore', previousScore);
 
-            for (let i = 0; i < 50; i++) {
-                const angle = Math.random() * Math.PI * 2;
-                const speed = Math.random() * 5 + 1;
-                particles.push(new Particle(player.currentX, player.y, 3, '#ff00ff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 40));
-            }
+            for (let i = 0; i < 50; i++) { const angle = Math.random() * Math.PI * 2; const speed = Math.random() * 5 + 1; particles.push(new Particle(player.currentX, player.y, 3, '#ff00ff', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, 40)); }
             screenShakeIntensity = 15;
             
             setTimeout(() => {
-                scoreContainer.classList.add('hidden');
-                menu.classList.remove('hidden');
-                startMenu.classList.add('hidden');
-                gameOverMenu.classList.remove('hidden');
+                scoreContainer.classList.add('hidden'); menu.classList.remove('hidden');
+                startMenu.classList.add('hidden'); gameOverMenu.classList.remove('hidden');
                 finalScoreEl.textContent = score;
             }, 500);
         }
 
-        function gameLoop() {
-            update();
-            draw();
-            requestAnimationFrame(gameLoop);
+        function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+
+        function openSkinsMenu(fromMenu) {
+            menuToReturnTo = fromMenu;
+            startMenu.classList.add('hidden');
+            gameOverMenu.classList.add('hidden');
+            skinsMenu.classList.remove('hidden');
+            totalDistanceEl.textContent = totalDistance;
+            populateSkinsMenu();
+        }
+
+        function closeSkinsMenu() {
+            skinsMenu.classList.add('hidden');
+            if (menuToReturnTo === 'start') {
+                startMenu.classList.remove('hidden');
+            } else {
+                gameOverMenu.classList.remove('hidden');
+            }
+        }
+
+        function populateSkinsMenu() {
+            skinsGrid.innerHTML = '';
+            SKINS.forEach(skin => {
+                const isUnlocked = totalDistance >= skin.unlockScore;
+                const isSelected = skin.id === currentSkinId;
+                
+                const card = document.createElement('div');
+                card.className = `skin-card p-4 rounded-lg flex flex-col items-center justify-between ${isSelected ? 'selected' : ''} ${!isUnlocked ? 'locked' : ''}`;
+                
+                const unlockText = isUnlocked ? 'Unlocked' : `Unlock at ${skin.unlockScore}`;
+                card.innerHTML = `
+                    <div class="text-xl font-bold">${skin.name}</div>
+                    <div class="w-16 h-16 my-4 bg-gray-800 rounded-full flex items-center justify-center text-3xl" style="color:${skin.color}; box-shadow: 0 0 10px ${skin.color};">
+                        ${skin.symbol}
+                    </div>
+                    <div class="text-sm">${unlockText}</div>
+                    <div class="mt-2 flex space-x-2 w-full">
+                        <button class="select-skin-btn neon-button py-1 rounded-md text-sm flex-1" data-skin-id="${skin.id}" ${!isUnlocked ? 'disabled' : ''}>
+                            ${isSelected ? 'Selected' : 'Select'}
+                        </button>
+                        <button class="play-with-skin-btn neon-button active py-1 rounded-md text-sm flex-1" data-skin-id="${skin.id}" ${!isUnlocked ? 'disabled' : ''}>
+                            Play
+                        </button>
+                    </div>
+                `;
+                skinsGrid.appendChild(card);
+            });
+        }
+        
+        function handleSkinSelection(e) {
+            const target = e.target;
+            if (target.classList.contains('select-skin-btn')) {
+                const skinId = target.dataset.skinId;
+                if (skinId) {
+                    currentSkinId = skinId;
+                    localStorage.setItem('voltDodgeCurrentSkin', skinId);
+                    populateSkinsMenu();
+                }
+            } else if (target.classList.contains('play-with-skin-btn')) {
+                const skinId = target.dataset.skinId;
+                if(skinId) {
+                    currentSkinId = skinId;
+                    localStorage.setItem('voltDodgeCurrentSkin', skinId);
+                    init();
+                }
+            }
         }
 
         // --- Event Listeners ---
@@ -557,12 +586,25 @@
         canvas.addEventListener('touchend', handleTouchEnd);
         startButton.addEventListener('click', init);
         retryButton.addEventListener('click', init);
+        skinsButton.addEventListener('click', () => openSkinsMenu('start'));
+        skinsButtonGameOver.addEventListener('click', () => openSkinsMenu('gameOver'));
+        backButton.addEventListener('click', closeSkinsMenu);
+        skinsGrid.addEventListener('click', handleSkinSelection);
         window.addEventListener('resize', setCanvasDimensions);
         
         // --- Final Setup ---
         function loadGame() {
-            highScore = localStorage.getItem('voltDodgeHighScore') || 0;
+            const savedHighScore = parseInt(localStorage.getItem('voltDodgeHighScore'));
+            const savedTotalDistance = parseInt(localStorage.getItem('voltDodgeTotalDistance'));
+            const savedPreviousScore = parseInt(localStorage.getItem('voltDodgePreviousScore'));
+
+            highScore = isNaN(savedHighScore) ? 0 : savedHighScore;
+            totalDistance = isNaN(savedTotalDistance) ? 0 : savedTotalDistance;
+            previousScore = isNaN(savedPreviousScore) ? 0 : savedPreviousScore;
+            
+            currentSkinId = localStorage.getItem('voltDodgeCurrentSkin') || 'default';
             highScoreEl.textContent = highScore;
+            
             setCanvasDimensions();
             if (stars.length === 0) {
                  for (let i = 0; i < 150; i++) stars.push(new Star(Math.ceil(Math.random() * 3)));
@@ -574,7 +616,3 @@
     </script>
 </body>
 </html>
-
-
-
-
